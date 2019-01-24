@@ -32,11 +32,18 @@ int main()
 		// You have to output the target position
 		// followed by the power (0 <= thrust <= 100)
 		// i.e.: "x y thrust"
-		string power = "100";
+		string power;
 
-		if (abs(nextCheckpointAngle) > 60)
-			power = "20";
+		int angle = abs(nextCheckpointAngle);
 
+		if (angle < 90)
+			power = "100";
+		else
+			power = "0";
+
+
+		if (nextCheckpointDist > 8000 && angle < 5)
+			power = "BOOST";
 
 		cout << nextCheckpointX << " " << nextCheckpointY << " " << power << endl;
 	}
