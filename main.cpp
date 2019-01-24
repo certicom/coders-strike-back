@@ -18,9 +18,12 @@ int main()
 		int y;
 		int nextCheckpointX; // x position of the next check point
 		int nextCheckpointY; // y position of the next check point
-
-		cin >> x >> y >> nextCheckpointX >> nextCheckpointY; cin.ignore();
-
+		int nextCheckpointDist; // distance to the next checkpoint
+		int nextCheckpointAngle; // angle between your pod orientation and the direction of the next checkpoint
+		cin >> x >> y >> nextCheckpointX >> nextCheckpointY >> nextCheckpointDist >> nextCheckpointAngle; cin.ignore();
+		int opponentX;
+		int opponentY;
+		cin >> opponentX >> opponentY; cin.ignore();
 
 		// Write an action using cout. DON'T FORGET THE "<< endl"
 		// To debug: cerr << "Debug messages..." << endl;
@@ -29,6 +32,12 @@ int main()
 		// You have to output the target position
 		// followed by the power (0 <= thrust <= 100)
 		// i.e.: "x y thrust"
-		cout << nextCheckpointX << " " << nextCheckpointY << " 100" << endl;
+		string power = "100";
+
+		if (abs(nextCheckpointAngle) > 60)
+			power = "20";
+
+
+		cout << nextCheckpointX << " " << nextCheckpointY << " " << power << endl;
 	}
 }
