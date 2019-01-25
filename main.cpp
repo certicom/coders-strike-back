@@ -212,7 +212,7 @@ int main()
 		if(nextCheckpointDist > 4000 && angle < 5 )
 		power = "BOOST";
 		*/
-
+		 
 
 		lastPos = Point(x, y);
 
