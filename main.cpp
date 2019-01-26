@@ -4,14 +4,37 @@
 #include <algorithm>
 #include <math.h>
 
+
+//---------------------------------------------------------------------------------------
+//-------------------------     Tweakable parameters     --------------------------------
+//---------------------------------------------------------------------------------------
+
 // define the intensity of speed compensation for trajectory correction 
-#define TRAJECTORY_CORRECTION_INTENSITY 0.01f // proportionel
+#define TRAJECTORY_CORRECTION_INTENSITY 0.008f // proportionel
+
+// the minimum angle between speed and checkpoint 
+// for wich we consider that the pod is on the right direction
+#define MINIMUM_GOOD_ANGLE 25 // proportionel
 
 // When we get close to a checkpoint, we must start turning toward the next 
 // one to benefit off the inertia. This create a 'drift effect' but sometimes
 // we can be to short to trigger the checkpoint, so this define set the level of safety we add
 // too low we miss, too high we waste time
-#define DRIFTING_SAFEFTY 0.4f // probably proportionel
+#define DRIFTING_SAFEFTY 0.4f // probably not exactly proportionel
+
+// The effective (using referential) speed threshold for detecting 'high energy' collisions
+#define COLLISION_THRESHOLD 300 // Proportionel
+
+// the minimal distance between the pod and the checkpoint to activate the boost
+#define BOOST_MIN_DISTANCE 2500
+
+// The maximal error angle between the pod and checkpoint to activate the boost
+#define BOOST_MAX_ANGLE 5
+
+//---------------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------------
+
 
 using namespace std;
 
@@ -76,14 +99,14 @@ int GetAngleBetweenTwoVectors(const Point& vector1, const Point& vector2) {
 }
 
 
-// this return a vector with a norme of 10000 because internaly point only use integers
+// this return a vector with a norme of 10000 instead of 1 because internaly point only use integers
 Point GetVectorFromAngle(int angle) {
 
 	float radAngle = (angle * M_PI) / 180.0f;
 	return Point(10000.0f*cosf(radAngle), 10000.0f*sinf(radAngle));
 }
 
-// very classic computation of the disatnce between two points
+// very classic computation of the distance between two points
 int Distance(const Point& vector1, const Point& vector2) {
 
 	Point p((vector1.x - vector2.x), (vector1.y - vector2.y));
@@ -136,7 +159,7 @@ public:
 	}
 
 	// This will be more detailled in the report
-	int GetStopDistance() {
+	int GetStopDistance() const {
 		// 5.666666 is the result of a simple convergent serie since friction is proportional
 		return speed.Norme() * (5.66666f - DRIFTING_SAFEFTY);
 	}
@@ -165,21 +188,18 @@ public:
 
 	Ally(Terrain& _terrain) : Pod(_terrain) {}
 
-	void GoTo(const Point& dest, const string& power) const {
 
-		// the previous algorithm wich worked very well
+	// the previous algorithm wich worked very well
+	// It correct the direction of the speed vector by targeting a point next to the checkpoint
+	Point TrajectoryCorrection(const Point& dest) const {
+
 		Point toTarget(dest.x - position.x, dest.y - position.y);
 
-		int alpha = GetAngle(toTarget);
-
-		int beta = GetAngle(speed);
-
-		int gamma = GetAngleBetweenTwoVectors(toTarget, speed);
-
+		int l_angle = GetAngleBetweenTwoVectors(toTarget, speed);
 
 		Point normal; // this is THE trajectory correction vector 
 
-		if (gamma >= 0)
+		if (l_angle >= 0)
 		{
 			normal = Point(-toTarget.y, toTarget.x); // the 'right' normal
 		}
@@ -188,21 +208,24 @@ public:
 			normal = Point(toTarget.y, -toTarget.x); // the 'left' normal
 		}
 
-
-		//float multiplier = (float)speed.Norme() / (1.0f/toTarget.Norme());
-
-		float multiplier = abs(gamma)*TRAJECTORY_CORRECTION_INTENSITY;
+		// This is very important, it define how far we offset the target from the checkpoint
+		// The current operation is not convincing 
+		float multiplier = abs(l_angle)*TRAJECTORY_CORRECTION_INTENSITY;
 
 		normal *= multiplier;
 
-		Point target;
-
-		target = dest;
-
+		Point target = dest;
 
 		if (speed.Norme() > 1)
 			target += normal;
 
+		return target;
+	}
+
+
+	void GoTo(const Point& dest, const string& power) const {
+
+		Point target = TrajectoryCorrection(dest);
 
 		cout << target.x << " " << target.y << " " << power << endl;
 	}
@@ -216,10 +239,22 @@ public:
 		return terrain->checkpoints[nextCheckpoint + 1];
 	}
 
-	bool IsOpponentTooClose(const Opponent& op) {
 
-		if (Distance(op.position, position) < 900) {
-			return true;
+	// the algorithm to find if we must turn on the shield, because a important collision will append
+	bool WillHitHardOpponent(const Opponent& op) {
+
+		Point NextPos(position.x + speed.x, position.y + speed.y);
+		Point NextOpponentPos(op.position.x + op.speed.x, op.position.y + op.speed.y);
+
+		// collision detection
+		if (Distance(NextPos, NextOpponentPos) < 800) { // pod have raduis of 400 so collison dist: 400*2
+
+														//this is not enought, we only accept 'high energy' collisions
+														// because shut down the engine for an insignificant trajectory change is not smart
+			Point collisionSpeed(speed.x - op.speed.x, speed.y - op.speed.y);
+
+			if (collisionSpeed.Norme() > COLLISION_THRESHOLD)
+				return true;
 		}
 		return false;
 	}
@@ -236,49 +271,75 @@ public:
 	// since the begging those 5 simple line seems to be incredible efficient
 	const string GetPowerForTarget(const Point& target) const {
 
-		int angle = abs(GetPodAngleWithSomething(target));
+		int l_angle = abs(GetPodAngleWithSomething(target));
 
-		if (angle > 90)
+		if (l_angle > 90)
 			return "0";
 
 		return "100";
+	}
+
+
+	bool ShouldBoost() const {
+
+		int l_angle = abs(GetPodAngleWithSomething(GetCheckpoint()));
+
+		// nextCheckpoint != 1 avoid wasting the boost at the beginning since that what the boss does
+		// It often result by a collision which make the boost useless
+		// Against other players that not a problem however
+		if (GetCheckpoint().Norme() > BOOST_MIN_DISTANCE &&
+			l_angle < BOOST_MAX_ANGLE &&
+			nextCheckpoint != 1)
+			return true;
+
+		return false;
+	}
+
+
+
+	// get if the speed of the pod is correct enought to go in 'drift mod'
+	bool ShouldDrift() const {
+
+		Point ToCheckpoint(GetCheckpoint().x - position.x, GetCheckpoint().y - position.y);
+
+		int l_angle = abs(GetAngleBetweenTwoVectors(ToCheckpoint, speed));
+
+		if (Distance(GetCheckpoint(), position) < GetStopDistance() && l_angle < MINIMUM_GOOD_ANGLE)
+			return true;
+
+		// it should stop messing with 'last moment useless correction'
+		Point prediction = position;
+		for (int i = 0; i<3; i++)
+		{
+			if (Distance(prediction, GetCheckpoint()) < 600) //600 : checkpoints size
+				return true;
+
+			prediction += speed;
+		}
+
+		return false;
 	}
 
 	// probably better as polymorphic function but here we do not need it
 	// this function control the pod
 	void Play(const Opponent& op1, const Opponent& op2) {
 
-
 		string power;
 
-		/*
-		if(GetCheckpoint().Norme() > 4000 && angle < 5 )
-		power = "BOOST";
-		*/
-
-		//cerr << "distance  " << GetStopDistance() << "     "  << Distance(GetCheckpoint(), position)<< endl;
-
-
-		Point ToCheckpoint(GetCheckpoint().x - position.x, GetCheckpoint().y - position.y);
-
-		int angle = abs(GetAngleBetweenTwoVectors(ToCheckpoint, speed));
-
-
-		if (Distance(GetCheckpoint(), position) < GetStopDistance() && angle < 30)
+		if (ShouldDrift())
 		{
 			power = GetPowerForTarget(GetNextCheckpoint());
 			GoTo(GetNextCheckpoint(), power);
 		}
 		else
 		{
-			power = GetPowerForTarget(GetCheckpoint());
+			power = GetPowerForTarget(GetCheckpoint()); // low priority behaviour
 
-			if (IsOpponentTooClose(op1) && Point(speed.x - op1.speed.x, speed.y - op1.speed.y).Norme() > 300)
+			if (ShouldBoost()) // higher priority behaviour
+				power = "BOOST";
+
+			if (WillHitHardOpponent(op1) || WillHitHardOpponent(op2)) // top priority behaviour
 				power = "SHIELD";
-
-			else if (IsOpponentTooClose(op2) && Point(speed.x - op2.speed.x, speed.y - op2.speed.y).Norme() > 300)
-				power = "SHIELD";
-
 
 			GoTo(GetCheckpoint(), power);
 		}
@@ -301,10 +362,7 @@ public:
 
 		power = "100";
 
-		if (IsOpponentTooClose(op1) && Point(speed.x - op1.speed.x, speed.y - op1.speed.y).Norme() > 300)
-			power = "SHIELD";
-
-		else if (IsOpponentTooClose(op2) && Point(speed.x - op2.speed.x, speed.y - op2.speed.y).Norme() > 300)
+		if (WillHitHardOpponent(op1) || WillHitHardOpponent(op2))
 			power = "SHIELD";
 
 		GoTo(op1.position, power);
@@ -317,12 +375,12 @@ int main()
 {
 	Terrain terrain = Terrain(); // this read the input data
 
-	// game loop
+								 // game loop
 	while (1) {
 
 		// those read the input, so the order is importants
 		Racer pod1 = Racer(terrain);
-		Blocker pod2 = Blocker(terrain);
+		Racer pod2 = Racer(terrain);
 
 
 		Opponent opponent1 = Opponent(terrain);
