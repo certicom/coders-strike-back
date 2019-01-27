@@ -9,28 +9,29 @@
 //---------------------------------------------------------------------------------------
 //-------------------------     Tweakable parameters     --------------------------------
 //---------------------------------------------------------------------------------------
-
 // define the intensity of speed compensation for trajectory correction 
-#define TRAJECTORY_CORRECTION_INTENSITY 0.008f // proportionel
-
-// the minimum angle between speed and checkpoint 
-// for wich we consider that the pod is on the right direction
-#define MINIMUM_GOOD_ANGLE 25 // proportionel
+#define TRAJECTORY_CORRECTION_INTENSITY 0.5f // proportionel
 
 // When we get close to a checkpoint, we must start turning toward the next 
-// one to benefit off the inertia. This create a 'drift effect' but sometimes
-// we can be to short to trigger the checkpoint, so this define set the level of safety we add
+// one to benefit of the inertia. This create a 'drift effect' but sometimes
+// we can be to short to trigger the checkpoint, so this define the level of safety we add.
 // too low we miss, too high we waste time
 #define DRIFTING_SAFEFTY 0.2f // probably not exactly proportionel
 
 // The effective (using referential) speed threshold for detecting 'high energy' collisions
-#define COLLISION_THRESHOLD 200 // Proportionel
+#define COLLISION_THRESHOLD 250 // Proportionel
 
 // the minimal distance between the pod and the checkpoint to activate the boost
-#define BOOST_MIN_DISTANCE 2500
+#define BOOST_MIN_DISTANCE 4000
 
 // The maximal error angle between the pod and checkpoint to activate the boost
-#define BOOST_MAX_ANGLE 5
+#define BOOST_MAX_ORIENTATION_ANGLE 5
+
+// The maximal error angle between the speed and checkpoint to activate the boost
+#define BOOST_MAX_SPEED_ANGLE 15
+
+// the minimal distance from its target which should be the bocker to start intercept it
+#define BLOCKER_INTERCEPT_MIN_DIST 3000
 
 //---------------------------------------------------------------------------------------
 //---------------------------------------------------------------------------------------
@@ -126,6 +127,27 @@ float Distance(const Point& vector1, const Point& vector2) {
 
 	Point p = vector1 - vector2;
 	return sqrtf(p.x*p.x + p.y*p.y);
+}
+
+//I still did not implement a proper collision function for this project, so here we go.
+bool CollisionRayCircle(const Point& C, int r, const Point& A, const Point& B) {
+	//vector product is probably the easiest choice here.
+
+	Point AB = B - A;
+	Point AC = C - A;
+
+	float u = abs(AB.x*AC.y - AB.y*AC.x); // ||AB^AC||
+										  // with I the point on AB which is the closest of C
+
+	float CI_norme = u / AB.Norme();
+
+	if (CI_norme > r) // collision line-circle, but still not enought
+		return false;
+
+	if (abs(GetAngleBetweenTwoVectors(AB, AC)) < 90) // Ignore collision behind A
+		return true;
+
+	return false;
 }
 
 
@@ -246,39 +268,6 @@ public:
 	Ally() : Pod() {}
 
 
-	// the previous algorithm wich worked very well
-	// It correct the direction of the speed vector by targeting a point next to the checkpoint
-	Point TrajectoryCorrection_old(const Point& dest) const {
-
-		Point toTarget = dest - position;
-
-		float l_angle = GetAngleBetweenTwoVectors(toTarget, speed);
-
-		Point normal; // this is THE trajectory correction vector 
-
-		if (l_angle >= 0)
-		{
-			normal = Point(-toTarget.y, toTarget.x); // the 'right' normal
-		}
-		else
-		{
-			normal = Point(toTarget.y, -toTarget.x); // the 'left' normal
-		}
-
-		// This is very important, it define how far we offset the target from the checkpoint
-		// The current operation is not convincing 
-		float multiplier = abs(l_angle)*TRAJECTORY_CORRECTION_INTENSITY;
-
-		normal *= multiplier;
-
-		Point target = dest;
-
-		if (speed.Norme() > 1)
-			target += normal;
-
-		return target;
-	}
-
 	Point TrajectoryCorrection(const Point& dest) const {
 
 		if (speed.Norme() < 1)
@@ -286,7 +275,7 @@ public:
 
 		Point toTarget = dest - position;
 
-		float alpha = GetAngleBetweenTwoVectors(toTarget, speed);
+		float alpha = GetAngleBetweenTwoVectors(toTarget, speed) * TRAJECTORY_CORRECTION_INTENSITY;
 
 		if (abs(alpha) > 60)
 			return dest;
@@ -363,8 +352,8 @@ public:
 	}
 
 
-	// the algorithm to find if we must turn on the shield, because a important collision will append
-	bool WillHitHardOpponent(const Opponent* op) {
+	// the algorithm find if we must turn on the shield, because a important collision will append
+	bool WillHitHardOpponent(const Opponent* op)const {
 
 		Point NextPos = position + speed;
 		Point NextOpponentPos = op->position + op->speed;
@@ -378,6 +367,15 @@ public:
 
 			if (collisionSpeed.Norme() > COLLISION_THRESHOLD)
 				return true;
+		}
+		return false;
+	}
+
+	// also return if the override happened
+	bool OverridePowerWithShieldIfNecessary(string& power)const {
+		if (WillHitHardOpponent(Opponent::opponent1) || WillHitHardOpponent(Opponent::opponent2)) { // top priority behaviour
+			power = "SHIELD";
+			return true;
 		}
 		return false;
 	}
@@ -410,13 +408,21 @@ public:
 
 	bool ShouldBoost() const {
 
-		float l_angle = abs(GetPodAngleWithSomething(GetCheckpoint()));
+
+		float orientation_angle = abs(GetPodAngleWithSomething(GetCheckpoint()));
+		float speed_angle = abs(GetAngleBetweenTwoVectors(GetCheckpoint() - position, speed));
+
+		if (CollisionRayCircle(Opponent::opponent1->position, 800, position, GetCheckpoint()))
+			return false;
+		if (CollisionRayCircle(Opponent::opponent2->position, 800, position, GetCheckpoint()))
+			return false;
 
 		// nextCheckpoint != 1 avoid wasting the boost at the beginning since that what the boss does
 		// It often result by a collision which make the boost useless
 		// Against other players that not a problem however
 		if (GetCheckpoint().Norme() > BOOST_MIN_DISTANCE &&
-			l_angle < BOOST_MAX_ANGLE &&
+			orientation_angle < BOOST_MAX_ORIENTATION_ANGLE &&
+			speed_angle < BOOST_MAX_SPEED_ANGLE &&
 			nextCheckpoint != 1)
 			return true;
 
@@ -424,32 +430,8 @@ public:
 	}
 
 
-	// get if the speed of the pod is correct enought to go in 'drift mod'
-	bool ShouldDrift_SimulationComputation() const {
-
-		cerr << "Simulation" << endl;
-
-		Racer simulatedRacer = Racer();
-
-		simulatedRacer.CopyForSimulation(this);
-
-		for (int i = 0; i<7; i++)
-		{
-			//simulatedRacer.play();
-
-			//cerr <<  simulatedRacer.position.x << " " << posSim.y<< "    " << speedSim.x << " " << speedSim.y << "   " << angleSim << endl;
-
-			// simulate drift
-			if (Distance(simulatedRacer.position, GetCheckpoint()) < 600) { //600 : checkpoints size
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-
-	bool ShouldDrift_SpeedComputation() const {
+	// Get if in the current state we should start drifting
+	bool ShouldDrift() const {
 
 		if (Distance(GetCheckpoint(), position) < GetStopDistance()) {// we admit that we can drift
 
@@ -459,7 +441,8 @@ public:
 
 			for (int i = 0; i<7; i++) {
 
-
+				// This is the second 'level simulation' it only simulate if starting to drift
+				// now will trigger the checkpoint (strangly it is pretty imprecise)
 				float angleWithNextCheckpoint = abs(GetAngleBetweenTwoVectors(GetVectorFromAngle(simAngle), GetNextCheckpoint() - simPos));
 
 				Point acceleration = Point();
@@ -473,12 +456,9 @@ public:
 				simPos = Point(int(simPos.x), (int)simPos.y);
 				simSpeed = Point(int(simSpeed.x), (int)simSpeed.y);
 
-				//cerr <<  simPos.x << " " << simPos.y<< "    " << simSpeed.x << " " << simSpeed.y << "   " << simAngle << endl;
-
 
 				if (Distance(simPos, GetCheckpoint()) < 600) //600 : checkpoints size
 					return true;
-
 			}
 
 		}
@@ -492,9 +472,10 @@ public:
 
 		string power;
 
-		if (ShouldDrift_SpeedComputation()) // ShouldDrift_SimulationComputation | ShouldDrift_SpeedComputation()
+		if (ShouldDrift())
 		{
 			power = GetPowerForTarget(GetNextCheckpoint());
+			OverridePowerWithShieldIfNecessary(power);
 			GoTo(GetNextCheckpoint(), power, isSimulation);
 		}
 		else
@@ -504,9 +485,7 @@ public:
 			if (ShouldBoost()) // higher priority behaviour
 				power = "BOOST";
 
-			if (WillHitHardOpponent(Opponent::opponent1) || WillHitHardOpponent(Opponent::opponent2)) // top priority behaviour
-				power = "SHIELD";
-
+			OverridePowerWithShieldIfNecessary(power);
 			GoTo(GetCheckpoint(), power, isSimulation);
 		}
 	}
@@ -521,7 +500,7 @@ class Blocker : public Ally
 {
 public:
 
-	Blocker() : Ally(), state_readyToHit(false) {}
+	Blocker() : Ally(), state_readyToHit(false), state_hasFarPoint(false) {}
 
 	int GetTimeToGo(const vector<int>& distances, const Point& target)const {
 
@@ -550,14 +529,14 @@ public:
 		for (int i = 0; i<20; i++) { // I do not think this is a simplifiable suite
 			simSpeed = (simSpeed + 100)*0.85f;
 			distances.push_back(distances[i] + simSpeed);
-			cerr << "inters : " << distances[distances.size() - 1] << endl;
+			//cerr << "inters : " << distances[distances.size()-1] << endl;
 		}
 		// now we know the distance which we can travel in a certain time
 
 		for (int i = 0; i<trajectory.size(); i++) { // This is O(n²) but optimizable
 
 			if (GetTimeToGo(distances, trajectory[i]) == i) {
-				return trajectory[i];
+				return trajectory[(i == 0 ? 0 : i - 1)]; // This little correction about the index seem to be awesome
 			}
 		}
 		return trajectory[trajectory.size() - 1];
@@ -591,8 +570,7 @@ public:
 
 		string power;
 
-		if (WillHitHardOpponent(Opponent::opponent1) || WillHitHardOpponent(Opponent::opponent2)) {
-			power = "SHIELD";
+		if (OverridePowerWithShieldIfNecessary(power)) {
 			state_readyToHit = false;
 			GoTo(bestTarget->position, power, isSimulation); // target does not matter only SHIELD
 		}
@@ -600,20 +578,23 @@ public:
 
 			if (!state_readyToHit) {
 
-				Point target = position + ((position - bestTarget->position)* 100.0f);
+				if (!state_hasFarPoint) {
+					farPoint = position - ((bestTarget->GetCheckpoint() - bestTarget->position)*100.0f);
+					state_hasFarPoint = true;
+				}
 
-				if (Distance(position, bestTarget->position) > 8000) {
+				if (Distance(position, bestTarget->position) > BLOCKER_INTERCEPT_MIN_DIST) {
 					state_readyToHit = true;
 				}
 				else {
-					power = GetPowerForTarget(target);
-					GoTo(target, power, isSimulation);
+					power = GetPowerForTarget(farPoint);
+					GoTo(farPoint, power, isSimulation);
 				}
 			}
 			// not an else because of the possible state modifcation
 			if (state_readyToHit) {
+				state_hasFarPoint = false;
 				Point target = InterpolateIntersection(bestTarget);
-				cerr << "best : " << bestTarget->position.x << " " << bestTarget->position.y << endl;
 				power = GetPowerForTarget(target);
 				GoTo(target, power, isSimulation);
 			}
@@ -621,6 +602,9 @@ public:
 	}
 
 	bool state_readyToHit;
+	bool state_hasFarPoint;
+	Point farPoint;
+
 
 	static Blocker* blocker;
 };
