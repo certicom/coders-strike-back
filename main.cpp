@@ -21,10 +21,10 @@
 // one to benefit off the inertia. This create a 'drift effect' but sometimes
 // we can be to short to trigger the checkpoint, so this define set the level of safety we add
 // too low we miss, too high we waste time
-#define DRIFTING_SAFEFTY 0.0f // probably not exactly proportionel
+#define DRIFTING_SAFEFTY 0.2f // probably not exactly proportionel
 
 // The effective (using referential) speed threshold for detecting 'high energy' collisions
-#define COLLISION_THRESHOLD 300 // Proportionel
+#define COLLISION_THRESHOLD 200 // Proportionel
 
 // the minimal distance between the pod and the checkpoint to activate the boost
 #define BOOST_MIN_DISTANCE 2500
@@ -81,12 +81,12 @@ float DegToRad(int deg) {
 // No API to do that apparently, like the given angle this return an angle between -180 and 180
 float GetAngle(const Point& vector) {
 
-	float alpha = atanf((float)vector.y / vector.x);
+	float alpha = atanf(vector.y / vector.x);
 
 	if (vector.x < 0)
-		alpha += M_PI; // to be on a 2pi range instead of 1pi
+		alpha += M_PI; // to be on a 2pi range instead of 1pi (-90/270)
 
-	if (alpha > M_PI)
+	if (alpha > M_PI) // to limit between -180/180 instead of -90 270
 		alpha -= 2 * M_PI;
 
 	return RadToDeg(alpha); // degres because the game gives degres
@@ -95,11 +95,11 @@ float GetAngle(const Point& vector) {
 
 // return the angle between two vectors
 // this is limited to -180 - 180
-float GetAngleBetweenTwoVectors(const Point& vector1, const Point& vector2) {
+float GetAngleBetweenTwoVectors(const Point& reference, const Point& vector) {
 
-	float alpha1 = GetAngle(vector1);
+	float alpha1 = GetAngle(vector);
 
-	float alpha2 = GetAngle(vector2);
+	float alpha2 = GetAngle(reference);
 
 	float diff = alpha1 - alpha2;
 
@@ -169,6 +169,9 @@ public:
 	// apparently allies and opponents receive the same infos so it is better here
 	virtual void Read() {
 		cin >> position.x >> position.y >> speed.x >> speed.y >> angle >> nextCheckpoint; cin.ignore();
+
+		if (angle > 180) // Why did they change that ?? -180 < angle < 180 is far better
+			angle -= 360;
 	}
 
 	// Get the angle between the direction of the pod and a point
@@ -214,7 +217,7 @@ public:
 
 	// return the total quantity of checkpoints triggered by this opponent
 	int GetCheckpointCount() const {
-		return ((currentLap - 1) * Terrain::nbCheckpoints) + (nextCheckpoint - 1);
+		return ((currentLap - 1 + endLap) * Terrain::nbCheckpoints) + (nextCheckpoint - 1);
 	}
 
 	// return a point from which we can easily block this opponent
@@ -290,7 +293,7 @@ public:
 
 		float beta = GetAngle(toTarget);
 
-		float gamma = beta + alpha;
+		float gamma = beta - alpha; //beta + (-alpha)
 
 		Point mirrorSpeedError = GetVectorFromAngle(gamma, speed.Norme());
 
@@ -309,8 +312,7 @@ public:
 
 	//return the number of degre that the simulated pod must be rotate
 	float Turn_Simulation(const Point& target) const {
-		float l_angle = GetAngleBetweenTwoVectors(GetVectorFromAngle(angle), target - position);
-
+		float l_angle = GetPodAngleWithSomething(target);
 		return (l_angle < 0.0f ? -1.0f : 1.0f) * (abs(l_angle) > 18 ? 18 : l_angle);
 	}
 
@@ -335,6 +337,10 @@ public:
 		speed *= 0.85f;
 		position = Point(int(position.x), (int)position.y);
 		speed = Point(int(speed.x), (int)speed.y);
+
+		if (Distance(position, Terrain::checkpoints[nextCheckpoint]) < 600) {
+			nextCheckpoint = (nextCheckpoint + 1) % Terrain::checkpoints.size();
+		}
 	}
 
 	void GoTo(const Point& dest, const string& power, bool isSimulation) {
@@ -417,22 +423,6 @@ public:
 		return false;
 	}
 
-	/*
-	bool Drift_Simulation(const Point& simSpeed, const Point& simPos) const{
-
-	Point ToCheckpoint = GetCheckpoint() - simPos;
-
-	float l_angle = abs(GetAngleBetweenTwoVectors(ToCheckpoint, simSpeed));
-
-	if(Distance(GetCheckpoint(), simPos) < GetStopDistance_Simulation(simSpeed)
-	&& l_angle < MINIMUM_GOOD_ANGLE)
-	return true;
-	return false;
-	}
-	*/
-
-
-
 
 	// get if the speed of the pod is correct enought to go in 'drift mod'
 	bool ShouldDrift_SimulationComputation() const {
@@ -461,17 +451,6 @@ public:
 
 	bool ShouldDrift_SpeedComputation() const {
 
-
-		/*
-		Point ToCheckpoint = GetCheckpoint() - position;
-
-		float l_angle = abs(GetAngleBetweenTwoVectors(ToCheckpoint, speed));
-
-		if (Distance(GetCheckpoint(), position) < GetStopDistance() && l_angle < MINIMUM_GOOD_ANGLE)
-		return true;
-		*/
-
-
 		if (Distance(GetCheckpoint(), position) < GetStopDistance()) {// we admit that we can drift
 
 			int simAngle = angle;
@@ -494,7 +473,7 @@ public:
 				simPos = Point(int(simPos.x), (int)simPos.y);
 				simSpeed = Point(int(simSpeed.x), (int)simSpeed.y);
 
-				cerr << simPos.x << " " << simPos.y << "    " << simSpeed.x << " " << simSpeed.y << "   " << simAngle << endl;
+				//cerr <<  simPos.x << " " << simPos.y<< "    " << simSpeed.x << " " << simSpeed.y << "   " << simAngle << endl;
 
 
 				if (Distance(simPos, GetCheckpoint()) < 600) //600 : checkpoints size
@@ -544,13 +523,68 @@ public:
 
 	Blocker() : Ally(), state_readyToHit(false) {}
 
+	int GetTimeToGo(const vector<int>& distances, const Point& target)const {
+
+		int toTarget = Distance(target, position);
+		for (int i = 1; i<distances.size(); i++) {
+
+			if (distances[i] > toTarget) {
+				if (distances[i] - toTarget < toTarget - distances[i - 1])
+					return i;
+				return i - 1;
+			}
+		}
+		return distances.size();
+	}
+
+	bool IsSpeedGloballyTowardTarget(const Point& target) const {
+		return (abs(GetAngleBetweenTwoVectors(speed, target - position)) < 90);
+	}
+
+	// get the best point on a trajectory to intersect the opponent
+	Point GetBestIntersection(const vector<Point>& trajectory, const Point& target)const {
+
+		vector<int>distances;
+		distances.push_back(0);
+		int simSpeed = speed.Norme() * (IsSpeedGloballyTowardTarget(target) ? 1.0f : -1.0f);
+		for (int i = 0; i<20; i++) { // I do not think this is a simplifiable suite
+			simSpeed = (simSpeed + 100)*0.85f;
+			distances.push_back(distances[i] + simSpeed);
+			cerr << "inters : " << distances[distances.size() - 1] << endl;
+		}
+		// now we know the distance which we can travel in a certain time
+
+		for (int i = 0; i<trajectory.size(); i++) { // This is O(n²) but optimizable
+
+			if (GetTimeToGo(distances, trajectory[i]) == i) {
+				return trajectory[i];
+			}
+		}
+		return trajectory[trajectory.size() - 1];
+	}
+
+	Point InterpolateIntersection(const Opponent* op) const {
+
+		vector<Point> trajectory;
+
+		Racer simulatedOp = Racer();
+		simulatedOp.CopyForSimulation(op);
+
+		for (int i = 0; i<20; i++) {
+			simulatedOp.Play(true); // play as simulation
+			trajectory.push_back(simulatedOp.position);
+		}
+
+		return GetBestIntersection(trajectory, op->position);
+	}
+
 	// this function control the pod
 	void Play(bool isSimulation = false) {
 
 		// we find the best opponent to try to block it
 		const Opponent* bestTarget;
 
-		if (Opponent::opponent1->GetCheckpointCount() > Opponent::opponent2->GetCheckpointCount()) // == does not matter
+		if (Opponent::opponent1->GetCheckpointCount() >= Opponent::opponent2->GetCheckpointCount()) // == does not matter
 			bestTarget = Opponent::opponent1;
 		else
 			bestTarget = Opponent::opponent2;
@@ -566,9 +600,9 @@ public:
 
 			if (!state_readyToHit) {
 
-				Point target = bestTarget->GetGoodPointToAttack();
+				Point target = position + ((position - bestTarget->position)* 100.0f);
 
-				if (Distance(position, target) < 1000) {
+				if (Distance(position, bestTarget->position) > 8000) {
 					state_readyToHit = true;
 				}
 				else {
@@ -578,8 +612,10 @@ public:
 			}
 			// not an else because of the possible state modifcation
 			if (state_readyToHit) {
-				power = GetPowerForTarget(bestTarget->position);
-				GoTo(bestTarget->position, power, isSimulation);
+				Point target = InterpolateIntersection(bestTarget);
+				cerr << "best : " << bestTarget->position.x << " " << bestTarget->position.y << endl;
+				power = GetPowerForTarget(target);
+				GoTo(target, power, isSimulation);
 			}
 		}
 	}
@@ -612,17 +648,8 @@ int main()
 		Blocker::blocker->Read();
 
 		Opponent::opponent1->Read();
-		Opponent::opponent1->Read();
+		Opponent::opponent2->Read();
 
-
-		Racer simulated = Racer();
-		simulated.CopyForSimulation(Racer::racer);
-
-		for (int i = 0; i<5; i++)
-		{
-			//simulated.Play(true);
-
-		}
 
 		// order is also important here
 		Racer::racer->Play();
