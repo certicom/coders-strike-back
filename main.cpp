@@ -19,10 +19,13 @@
 #define DRIFTING_SAFEFTY 0.2f // probably not exactly proportionel
 
 // The effective (using referential) speed threshold for detecting 'high energy' collisions
-#define COLLISION_THRESHOLD 250 // Proportionel
+#define COLLISION_THRESHOLD_RACER 250 // Proportionel
+
+// The effective (using referential) speed threshold for detecting 'high energy' collisions
+#define COLLISION_THRESHOLD_BLOCKER 100 // Proportionel
 
 // the minimal distance between the pod and the checkpoint to activate the boost
-#define BOOST_MIN_DISTANCE 4000
+#define BOOST_MIN_DISTANCE 7000
 
 // The maximal error angle between the pod and checkpoint to activate the boost
 #define BOOST_MAX_ORIENTATION_ANGLE 5
@@ -31,7 +34,7 @@
 #define BOOST_MAX_SPEED_ANGLE 15
 
 // the minimal distance from its target which should be the bocker to start intercept it
-#define BLOCKER_INTERCEPT_MIN_DIST 3000
+#define BLOCKER_INTERCEPT_MIN_DIST 2000
 
 //---------------------------------------------------------------------------------------
 //---------------------------------------------------------------------------------------
@@ -353,7 +356,7 @@ public:
 
 
 	// the algorithm find if we must turn on the shield, because a important collision will append
-	bool WillHitHardOpponent(const Opponent* op)const {
+	bool WillHitHardOpponent(const Opponent* op, int threshold)const {
 
 		Point NextPos = position + speed;
 		Point NextOpponentPos = op->position + op->speed;
@@ -365,15 +368,16 @@ public:
 														// because shut down the engine for an insignificant trajectory change is not smart
 			Point collisionSpeed = speed - op->speed;
 
-			if (collisionSpeed.Norme() > COLLISION_THRESHOLD)
+			if (collisionSpeed.Norme() > threshold)
 				return true;
 		}
 		return false;
 	}
 
 	// also return if the override happened
-	bool OverridePowerWithShieldIfNecessary(string& power)const {
-		if (WillHitHardOpponent(Opponent::opponent1) || WillHitHardOpponent(Opponent::opponent2)) { // top priority behaviour
+	bool OverridePowerWithShieldIfNecessary(string& power, int threshold)const {
+		if (WillHitHardOpponent(Opponent::opponent1, threshold) ||
+			WillHitHardOpponent(Opponent::opponent2, threshold)) { // top priority behaviour
 			power = "SHIELD";
 			return true;
 		}
@@ -475,7 +479,7 @@ public:
 		if (ShouldDrift())
 		{
 			power = GetPowerForTarget(GetNextCheckpoint());
-			OverridePowerWithShieldIfNecessary(power);
+			OverridePowerWithShieldIfNecessary(power, COLLISION_THRESHOLD_RACER);
 			GoTo(GetNextCheckpoint(), power, isSimulation);
 		}
 		else
@@ -485,7 +489,7 @@ public:
 			if (ShouldBoost()) // higher priority behaviour
 				power = "BOOST";
 
-			OverridePowerWithShieldIfNecessary(power);
+			OverridePowerWithShieldIfNecessary(power, COLLISION_THRESHOLD_RACER);
 			GoTo(GetCheckpoint(), power, isSimulation);
 		}
 	}
@@ -501,6 +505,47 @@ class Blocker : public Ally
 public:
 
 	Blocker() : Ally(), state_readyToHit(false), state_hasFarPoint(false) {}
+
+	bool BlockByFrontCollision(const Opponent* target, bool isSimulation) {
+
+		bool haveDoneSomething = false;
+		Point newTarget;
+		// this is trying to block him, if we are just next to him
+		cerr << Distance(target->position, position) << " " << target->speed.Norme() << endl;
+		if (Distance(target->position, position) < 2000 && target->speed.Norme() < 800) {
+
+			Point targetToItsCheckpoint = target->GetCheckpoint() - target->position;
+
+			// strangly, it is the only place in the whole code that we must normalize
+			targetToItsCheckpoint /= targetToItsCheckpoint.Norme();
+
+			targetToItsCheckpoint *= (Distance(target->position, position)*2.0f);
+
+			newTarget = target->position + targetToItsCheckpoint;
+			haveDoneSomething = true;
+
+			cerr << "front block" << endl;
+		}
+		// this is for rushing on the opponent if we are on its trajectory
+		cerr << abs(GetAngleBetweenTwoVectors(target->GetCheckpoint() - target->position, position - target->position)) << endl;
+		if (abs(GetAngleBetweenTwoVectors(target->GetCheckpoint() - target->position, position - target->position)) < 20) {
+
+			// safety to make sure we do not attack someone for nothing
+			if (Distance(target->position, position) < Distance(target->position, target->GetCheckpoint())) { // can be improve
+
+				newTarget = target->position;
+				haveDoneSomething = true;
+
+				cerr << "Rush" << endl;
+			}
+		}
+
+		// override with shield is already a top priority for the blocker, we do not need to add it
+		if (haveDoneSomething)
+			GoTo(newTarget, "100", isSimulation);
+
+		return haveDoneSomething;
+	}
 
 	int GetTimeToGo(const vector<int>& distances, const Point& target)const {
 
@@ -529,7 +574,6 @@ public:
 		for (int i = 0; i<20; i++) { // I do not think this is a simplifiable suite
 			simSpeed = (simSpeed + 100)*0.85f;
 			distances.push_back(distances[i] + simSpeed);
-			//cerr << "inters : " << distances[distances.size()-1] << endl;
 		}
 		// now we know the distance which we can travel in a certain time
 
@@ -570,7 +614,7 @@ public:
 
 		string power;
 
-		if (OverridePowerWithShieldIfNecessary(power)) {
+		if (OverridePowerWithShieldIfNecessary(power, COLLISION_THRESHOLD_BLOCKER)) {
 			state_readyToHit = false;
 			GoTo(bestTarget->position, power, isSimulation); // target does not matter only SHIELD
 		}
@@ -578,17 +622,21 @@ public:
 
 			if (!state_readyToHit) {
 
-				if (!state_hasFarPoint) {
-					farPoint = position - ((bestTarget->GetCheckpoint() - bestTarget->position)*100.0f);
-					state_hasFarPoint = true;
-				}
+				if (!BlockByFrontCollision(bestTarget, isSimulation)) {
 
-				if (Distance(position, bestTarget->position) > BLOCKER_INTERCEPT_MIN_DIST) {
-					state_readyToHit = true;
-				}
-				else {
-					power = GetPowerForTarget(farPoint);
-					GoTo(farPoint, power, isSimulation);
+					if (!state_hasFarPoint) {
+						farPoint = position - ((bestTarget->GetCheckpoint() - bestTarget->position)*100.0f);
+						state_hasFarPoint = true;
+					}
+
+					if (Distance(position, bestTarget->position) > BLOCKER_INTERCEPT_MIN_DIST) {
+						state_readyToHit = true;
+					}
+					else {
+						power = GetPowerForTarget(farPoint);
+						GoTo(farPoint, power, isSimulation);
+					}
+
 				}
 			}
 			// not an else because of the possible state modifcation
