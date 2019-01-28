@@ -35,14 +35,14 @@
 
 // the minimal distance from its target which should be the bocker to start intercept it
 #define BLOCKER_INTERCEPT_MIN_DIST 2000
-
-//---------------------------------------------------------------------------------------
-//---------------------------------------------------------------------------------------
 //---------------------------------------------------------------------------------------
 
 
 using namespace std;
 
+//---------------------------------------------------------------------------------------
+//-------------------------------- Class Point ------------------------------------------
+//---------------------------------------------------------------------------------------
 // This will be way more simple with a Point structure
 class Point
 {
@@ -71,18 +71,26 @@ public:
 	float x;
 	float y;
 };
+//---------------------------------------------------------------------------------------
 
 
+
+//---------------------------------------------------------------------------------------
+//------------------------------ Basic functions ----------------------------------------
+//---------------------------------------------------------------------------------------
+
+// Convert a radian value into a degre value
 float RadToDeg(float rad) {
 	return (rad * 180.0f) / M_PI;
 }
 
+// Convert a degre value into a radian value
 float DegToRad(int deg) {
 	return (deg * M_PI) / 180.0f;
 }
 
 
-// No API to do that apparently, like the given angle this return an angle between -180 and 180
+//like the given angle this return an angle between -180 and 180
 float GetAngle(const Point& vector) {
 
 	float alpha = atanf(vector.y / vector.x);
@@ -118,7 +126,7 @@ float GetAngleBetweenTwoVectors(const Point& reference, const Point& vector) {
 }
 
 
-
+// return a vector defined by an angle and a norme
 Point GetVectorFromAngle(float angle, float norme = 1.0f) {
 
 	float radAngle = DegToRad(angle);
@@ -152,9 +160,15 @@ bool CollisionRayCircle(const Point& C, int r, const Point& A, const Point& B) {
 
 	return false;
 }
+//---------------------------------------------------------------------------------------
 
 
 
+//---------------------------------------------------------------------------------------
+//-------------------------------- Class Terrain ------------------------------------------
+//---------------------------------------------------------------------------------------
+
+// The static class taht define the terrain
 class Terrain
 {
 public:
@@ -179,11 +193,14 @@ public:
 int Terrain::laps;
 int Terrain::nbCheckpoints;
 std::vector<Point> Terrain::checkpoints;
+//---------------------------------------------------------------------------------------
 
 
+//---------------------------------------------------------------------------------------
+//-------------------------------- Class Pod ------------------------------------------
+//---------------------------------------------------------------------------------------
 
-
-
+// This class define the bases of any Pod in the game or simulated
 class Pod
 {
 public:
@@ -191,7 +208,7 @@ public:
 
 	Pod() { }
 
-	// apparently allies and opponents receive the same infos so it is better here
+	// apparently allies and opponents receive the same infos so it is better in base class
 	virtual void Read() {
 		cin >> position.x >> position.y >> speed.x >> speed.y >> angle >> nextCheckpoint; cin.ignore();
 
@@ -220,9 +237,14 @@ public:
 	float angle;
 	int nextCheckpoint;
 };
+//---------------------------------------------------------------------------------------
 
 
+//---------------------------------------------------------------------------------------
+//-------------------------------- Class Opponent ---------------------------------------
+//---------------------------------------------------------------------------------------
 
+// Opponent is the class that define a ennemy pod
 class Opponent : public Pod
 {
 public:
@@ -261,9 +283,15 @@ public:
 
 Opponent* Opponent::opponent1;
 Opponent* Opponent::opponent2;
+//---------------------------------------------------------------------------------------
 
 
 
+//---------------------------------------------------------------------------------------
+//--------------------------------- Class Ally ------------------------------------------
+//---------------------------------------------------------------------------------------
+
+// Ally is the base class for all pod that we can control or simulate
 class Ally : public Pod
 {
 public:
@@ -271,16 +299,17 @@ public:
 	Ally() : Pod() {}
 
 
+	//This is the version 2 of this algorithm, this mirror the speed error to compensate
 	Point TrajectoryCorrection(const Point& dest) const {
 
-		if (speed.Norme() < 1)
+		if (speed.Norme() < 1) // without speed, this function is uselless
 			return dest;
 
 		Point toTarget = dest - position;
 
 		float alpha = GetAngleBetweenTwoVectors(toTarget, speed) * TRAJECTORY_CORRECTION_INTENSITY;
 
-		if (abs(alpha) > 60)
+		if (abs(alpha) > 60) // if the speed error is too much, we consider that the correction will be auto corrected by acceleration or its too late to compensate
 			return dest;
 
 		float beta = GetAngle(toTarget);
@@ -293,7 +322,7 @@ public:
 	}
 
 
-
+	// If we want to simulate a pod, we can copy the current state of the other pod into this one
 	void CopyForSimulation(const Pod* other) {
 
 		angle = other->angle;
@@ -309,6 +338,7 @@ public:
 	}
 
 
+	// This function will fully simulate the game engine on this pod except for shield and boost 
 	void Simulate(const Point& destination, const string& power) {
 
 		int intPower;
@@ -321,7 +351,7 @@ public:
 			iss >> intPower;
 		}
 
-		// Game engine simulation
+		// Game engine simulation base on documentation
 		angle += Turn_Simulation(destination);
 		Point acceleration = GetVectorFromAngle(angle, (float)intPower);
 		speed += acceleration;
@@ -330,19 +360,20 @@ public:
 		position = Point(int(position.x), (int)position.y);
 		speed = Point(int(speed.x), (int)speed.y);
 
-		if (Distance(position, Terrain::checkpoints[nextCheckpoint]) < 600) {
+		if (Distance(position, Terrain::checkpoints[nextCheckpoint]) < 600) { // collision with checkpoint
 			nextCheckpoint = (nextCheckpoint + 1) % Terrain::checkpoints.size();
 		}
 	}
 
+	// this function will handle automaticaly the behaviour of the pod to go to its destination either it is simulated or not
 	void GoTo(const Point& dest, const string& power, bool isSimulation) {
 
 		Point target = TrajectoryCorrection(dest);
 
-		if (isSimulation)
+		if (isSimulation) // simulated
 			Simulate(target, power);
 		else
-			cout << (int)target.x << " " << (int)target.y << " " << power << endl;
+			cout << (int)target.x << " " << (int)target.y << " " << power << endl; // not simulated
 	}
 
 	// GetNextCheckpoint mean the point after my current destination 
@@ -361,12 +392,12 @@ public:
 		Point NextPos = position + speed;
 		Point NextOpponentPos = op->position + op->speed;
 
-		// collision detection
+		// collision detection for the next round
 		if (Distance(NextPos, NextOpponentPos) < 800) { // pod have raduis of 400 so collison dist: 400*2
 
-														//this is not enought, we only accept 'high energy' collisions
-														// because shut down the engine for an insignificant trajectory change is not smart
-			Point collisionSpeed = speed - op->speed;
+			// This is not enought, we only accept 'high energy' collisions
+			// because shut down the engine for an insignificant trajectory change is not smart
+			Point collisionSpeed = speed - op->speed; // compute the relative velocity
 
 			if (collisionSpeed.Norme() > threshold)
 				return true;
@@ -374,11 +405,11 @@ public:
 		return false;
 	}
 
-	// also return if the override happened
+	// Override the parameter power if a important collision will happen, also return if the override happened
 	bool OverridePowerWithShieldIfNecessary(string& power, int threshold)const {
 		if (WillHitHardOpponent(Opponent::opponent1, threshold) ||
-			WillHitHardOpponent(Opponent::opponent2, threshold)) { // top priority behaviour
-			power = "SHIELD";
+			WillHitHardOpponent(Opponent::opponent2, threshold)) {
+			power = "SHIELD"; // override
 			return true;
 		}
 		return false;
@@ -394,10 +425,15 @@ public:
 
 		return "100";
 	}
-
 };
+//---------------------------------------------------------------------------------------
 
 
+//---------------------------------------------------------------------------------------
+//-------------------------------- Class Racer ------------------------------------------
+//---------------------------------------------------------------------------------------
+
+// Racer is a derivated class of my pods, the racer try to win the racer as fast as it can.
 class Racer : public Ally
 {
 public:
@@ -406,12 +442,11 @@ public:
 
 	void Read() {
 		Ally::Read();
-		cerr << position.x << " " << position.y << "    " << speed.x << " " << speed.y << "   " << angle << endl;
 	}
 
 
+	// return if we are in the very special case where every conditions to use the boost are validated
 	bool ShouldBoost() const {
-
 
 		float orientation_angle = abs(GetPodAngleWithSomething(GetCheckpoint()));
 		float speed_angle = abs(GetAngleBetweenTwoVectors(GetCheckpoint() - position, speed));
@@ -453,6 +488,7 @@ public:
 				if (angleWithNextCheckpoint < 90)
 					acceleration = GetVectorFromAngle(simAngle, 100.0f);
 
+				// this can be factorized with the full simulation
 				simAngle += Turn_Simulation(GetNextCheckpoint());
 				simSpeed += acceleration;
 				simPos += simSpeed;
@@ -460,11 +496,9 @@ public:
 				simPos = Point(int(simPos.x), (int)simPos.y);
 				simSpeed = Point(int(simSpeed.x), (int)simSpeed.y);
 
-
 				if (Distance(simPos, GetCheckpoint()) < 600) //600 : checkpoints size
 					return true;
 			}
-
 		}
 		return false;
 	}
@@ -476,6 +510,7 @@ public:
 
 		string power;
 
+		// Very simple condition tree
 		if (ShouldDrift())
 		{
 			power = GetPowerForTarget(GetNextCheckpoint());
@@ -489,7 +524,7 @@ public:
 			if (ShouldBoost()) // higher priority behaviour
 				power = "BOOST";
 
-			OverridePowerWithShieldIfNecessary(power, COLLISION_THRESHOLD_RACER);
+			OverridePowerWithShieldIfNecessary(power, COLLISION_THRESHOLD_RACER); // top priority behaviour
 			GoTo(GetCheckpoint(), power, isSimulation);
 		}
 	}
@@ -498,6 +533,12 @@ public:
 };
 
 Racer* Racer::racer;
+//---------------------------------------------------------------------------------------
+
+
+//---------------------------------------------------------------------------------------
+//-------------------------------- Class Blocker ----------------------------------------
+//---------------------------------------------------------------------------------------
 
 // The simplest strategy that I can think about with two pod is to use one for blocking the opponents
 class Blocker : public Ally
@@ -506,12 +547,14 @@ public:
 
 	Blocker() : Ally(), state_readyToHit(false), state_hasFarPoint(false) {}
 
+	// this function contains two algoritms for blocking opponents that are close.
+	// it also return if this function has triggered the goTo function
 	bool BlockByFrontCollision(const Opponent* target, bool isSimulation) {
 
 		bool haveDoneSomething = false;
 		Point newTarget;
-		// this is trying to block him, if we are just next to him
-		cerr << Distance(target->position, position) << " " << target->speed.Norme() << endl;
+
+		// this is trying to block the target, if we are just next to him
 		if (Distance(target->position, position) < 2000 && target->speed.Norme() < 800) {
 
 			Point targetToItsCheckpoint = target->GetCheckpoint() - target->position;
@@ -523,20 +566,15 @@ public:
 
 			newTarget = target->position + targetToItsCheckpoint;
 			haveDoneSomething = true;
-
-			cerr << "front block" << endl;
 		}
+
 		// this is for rushing on the opponent if we are on its trajectory
-		cerr << abs(GetAngleBetweenTwoVectors(target->GetCheckpoint() - target->position, position - target->position)) << endl;
 		if (abs(GetAngleBetweenTwoVectors(target->GetCheckpoint() - target->position, position - target->position)) < 20) {
 
 			// safety to make sure we do not attack someone for nothing
 			if (Distance(target->position, position) < Distance(target->position, target->GetCheckpoint())) { // can be improve
-
 				newTarget = target->position;
 				haveDoneSomething = true;
-
-				cerr << "Rush" << endl;
 			}
 		}
 
@@ -547,6 +585,7 @@ public:
 		return haveDoneSomething;
 	}
 
+	// this return the simulated time that the pod will need to arrive on a certain target
 	int GetTimeToGo(const vector<int>& distances, const Point& target)const {
 
 		int toTarget = Distance(target, position);
@@ -561,13 +600,15 @@ public:
 		return distances.size();
 	}
 
+	// Simple function that return if we globally move closer to the target or not
 	bool IsSpeedGloballyTowardTarget(const Point& target) const {
 		return (abs(GetAngleBetweenTwoVectors(speed, target - position)) < 90);
 	}
 
-	// get the best point on a trajectory to intersect the opponent
+	// Get the best point on a trajectory to intersect the opponent
 	Point GetBestIntersection(const vector<Point>& trajectory, const Point& target)const {
 
+		// this is the simulation of 'third level', it only simulate the position and the velocity of the pod
 		vector<int>distances;
 		distances.push_back(0);
 		int simSpeed = speed.Norme() * (IsSpeedGloballyTowardTarget(target) ? 1.0f : -1.0f);
@@ -586,12 +627,14 @@ public:
 		return trajectory[trajectory.size() - 1];
 	}
 
+
+	// This function is the heaviest of this project because it is able to predict an almost perfect interception point.
 	Point InterpolateIntersection(const Opponent* op) const {
 
 		vector<Point> trajectory;
 
 		Racer simulatedOp = Racer();
-		simulatedOp.CopyForSimulation(op);
+		simulatedOp.CopyForSimulation(op); // prepare a simulated pod to simulate the opponent
 
 		for (int i = 0; i<20; i++) {
 			simulatedOp.Play(true); // play as simulation
@@ -614,6 +657,7 @@ public:
 
 		string power;
 
+		// this is a far more advanced condition tree, but it can be draw to prove that exactly one GoTo will be called
 		if (OverridePowerWithShieldIfNecessary(power, COLLISION_THRESHOLD_BLOCKER)) {
 			state_readyToHit = false;
 			GoTo(bestTarget->position, power, isSimulation); // target does not matter only SHIELD
@@ -658,8 +702,14 @@ public:
 };
 
 Blocker* Blocker::blocker;
+//---------------------------------------------------------------------------------------
 
 
+
+
+//---------------------------------------------------------------------------------------
+//--------------------------------------- Main ------------------------------------------
+//---------------------------------------------------------------------------------------
 
 int main()
 {
